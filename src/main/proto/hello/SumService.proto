@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+option java_package = "com.example";
+option java_multiple_files = true;
+
+message MaximumRequest {
+    int32 number = 1;
+}
+
+message MaximumResponse {
+    int32 maximum = 1;
+}
+
+message DeadlineRequest {
+    int32 number = 1;
+}
+
+message DeadlineResponse {
+    int32 result = 1;
+}
+
+service SumService {
+    // BiDirectional
+    rpc maximum(stream MaximumRequest) returns (stream MaximumResponse) {};
+    // Unary
+    rpc withDeadline(DeadlineRequest) returns (DeadlineResponse) {};
+}
