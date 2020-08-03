@@ -1,10 +1,17 @@
 package com.example.grpc.service.course;
 
+import com.example.AverageRequest;
+import com.example.AverageResponse;
 import com.example.DeadlineRequest;
 import com.example.DeadlineResponse;
+import com.example.DecompositionRequest;
 import com.example.MaximumRequest;
 import com.example.MaximumResponse;
+import com.example.SumRequest;
+import com.example.SumResponse;
 import com.example.SumServiceGrpc;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Status;
@@ -17,6 +24,8 @@ import java.util.concurrent.TimeUnit;
 
 public class GrpcClient {
 
+    private static final Logger log = LoggerFactory.getLogger(GrpcClient.class);
+
     public static void main(String[] args) throws InterruptedException {
         GrpcClient client = new GrpcClient();
         client.run();
@@ -28,12 +37,67 @@ public class GrpcClient {
             .usePlaintext() // deactivate ssl
             .build();
 
+        SumServiceGrpc.SumServiceBlockingStub syncClient = SumServiceGrpc.newBlockingStub(channel);
         SumServiceGrpc.SumServiceStub asyncClient = SumServiceGrpc.newStub(channel);
+
+        // Unary
+        SumResponse response = syncClient.sum(
+            SumRequest.newBuilder()
+                .setA(10)
+                .setB(3)
+                .build()
+        );
+
+        log.info("Sum is: {}", response.getResult());
+
+        // Server streaming
+        syncClient.decompose(
+            DecompositionRequest.newBuilder()
+                .setNumber(123456789)
+                .build()
+        ).forEachRemaining(decompositionResponse -> log.info("Factor is: {}", decompositionResponse.getFactor()));
+
+        // Client streaming
+        CountDownLatch latch = new CountDownLatch(1);
+        StreamObserver<AverageRequest> averageRequestStreamObserver = asyncClient.average(new StreamObserver<AverageResponse>() {
+            @Override
+            public void onNext(AverageResponse value) {
+                log.info("Average is: {}", value.getResult());
+            }
+
+            @Override
+            public void onError(Throwable t) {
+            }
+
+            @Override
+            public void onCompleted() {
+                log.info("Server complete it's work");
+                latch.countDown();
+            }
+        });
+
+        for (int i = 0; i < 10000; i++) {
+            averageRequestStreamObserver.onNext(
+                AverageRequest.newBuilder()
+                    .setNumber(i + 1)
+                    .build()
+            );
+        }
+
+        averageRequestStreamObserver.onCompleted();
+
+        try {
+            latch.await(3L, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            log.error(e.getMessage());
+        }
+
+        // Bidirectional
         final CountDownLatch finishLatch = new CountDownLatch(1);
-        StreamObserver<MaximumRequest> requestObserver = asyncClient.maximum(new StreamObserver<MaximumResponse>() {
+        StreamObserver<MaximumRequest> maximumRequestStreamObserver = asyncClient.maximum(new StreamObserver<MaximumResponse>() {
             @Override
             public void onNext(MaximumResponse response) {
-                System.out.println(response.getMaximum());
+                log.info("Maximum is: {}", response.getMaximum());
             }
 
             @Override
@@ -46,35 +110,34 @@ public class GrpcClient {
                 finishLatch.countDown();
             }
         });
+
         try {
             for (Integer integer : Arrays.asList(1, 2, 3, 4, 3, 2, 1, 6)) {
-                requestObserver.onNext(MaximumRequest.newBuilder().setNumber(integer).build());
+                maximumRequestStreamObserver.onNext(MaximumRequest.newBuilder().setNumber(integer).build());
             }
         } catch (RuntimeException e) {
             // Cancel RPC
-            requestObserver.onError(e);
+            maximumRequestStreamObserver.onError(e);
             throw e;
         }
         // Mark the end of requests
-        requestObserver.onCompleted();
+        maximumRequestStreamObserver.onCompleted();
 
         // Receiving happens asynchronously
         if (!finishLatch.await(1, TimeUnit.MINUTES)) {
-            System.out.println("Exceed");
+            log.error("Exceed");
         }
 
-        //
-        SumServiceGrpc.SumServiceBlockingStub syncClient = SumServiceGrpc.newBlockingStub(channel);
         try {
-            DeadlineResponse response = syncClient.withDeadlineAfter(1000, TimeUnit.MILLISECONDS)
+            DeadlineResponse deadlineResponse = syncClient.withDeadlineAfter(1000, TimeUnit.MILLISECONDS)
                 .withDeadline(DeadlineRequest.newBuilder()
                     .setNumber(333)
                     .build()
                 );
-            System.out.println(response.getResult());
+            log.info("Deadline result: {}", deadlineResponse.getResult());
         } catch (StatusRuntimeException e) {
             if (e.getStatus().getCode() == Status.Code.DEADLINE_EXCEEDED) {
-                System.out.println("Deadline exceed");
+                log.error("Deadline exceed");
             }
         }
 
